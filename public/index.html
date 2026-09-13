@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cloud Notes App</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; background: #f7f8fa; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; }
+  .card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  input, textarea { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; }
+  button { background: #232F3E; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 0.95rem; }
+  button:hover { background: #FF9900; }
+  .note { display: flex; justify-content: space-between; align-items: start; }
+  .note-body { flex: 1; }
+  .note h3 { margin: 0 0 6px 0; }
+  .note p { margin: 0; color: #555; }
+  .del { background: #D13212; padding: 6px 10px; font-size: 0.8rem; }
+  .status { font-size: 0.85rem; color: #888; margin-top: -8px; }
+</style>
+</head>
+<body>
+  <h1>☁️ Cloud Notes App</h1>
+  <p class="status" id="health">Checking connection...</p>
+
+  <div class="card">
+    <form id="noteForm">
+      <input type="text" id="title" placeholder="Note title" required>
+      <textarea id="content" placeholder="Note content" rows="3"></textarea>
+      <input type="file" id="file">
+      <button type="submit">Add Note</button>
+    </form>
+  </div>
+
+  <div id="notes"></div>
+
+<script>
+async function checkHealth() {
+  try {
+    const res = await fetch('/health');
+    const data = await res.json();
+    document.getElementById('health').textContent = data.status === 'ok'
+      ? '🟢 Connected — database reachable' : '🔴 Database unreachable';
+  } catch { document.getElementById('health').textContent = '🔴 Server unreachable'; }
+}
+
+async function loadNotes() {
+  const res = await fetch('/api/notes');
+  const notes = await res.json();
+  const container = document.getElementById('notes');
+  container.innerHTML = notes.map(n => `
+    <div class="card note">
+      <div class="note-body">
+        <h3>${n.title}</h3>
+        <p>${n.content || ''}</p>
+        ${n.file_url ? `<a href="${n.file_url}" target="_blank">📎 Attachment</a>` : ''}
+      </div>
+      <button class="del" onclick="deleteNote(${n.id})">Delete</button>
+    </div>
+  `).join('') || '<p>No notes yet — add one above.</p>';
+}
+
+async function deleteNote(id) {
+  await fetch(`/api/notes/${id}`, { method: 'DELETE' });
+  loadNotes();
+}
+
+document.getElementById('noteForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const formData = new FormData();
+  formData.append('title', document.getElementById('title').value);
+  formData.append('content', document.getElementById('content').value);
+  const fileInput = document.getElementById('file');
+  if (fileInput.files[0]) formData.append('file', fileInput.files[0]);
+
+  await fetch('/api/notes', { method: 'POST', body: formData });
+  e.target.reset();
+  loadNotes();
+});
+
+checkHealth();
+loadNotes();
+</script>
+</body>
+</html>
