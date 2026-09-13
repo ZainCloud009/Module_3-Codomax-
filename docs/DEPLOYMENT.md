@@ -1,19 +1,13 @@
 # Deployment Guide — AWS
 
-This app deploys as: **EC2 (compute) + RDS PostgreSQL (database) + S3 (storage) + IAM Role + Security Groups + CloudWatch**
+This app deploys as: **EC2 (compute, single instance) + MariaDB (local database, installed on the same EC2 instance) + Apache httpd (reverse proxy) + S3 (storage) + IAM Role + Security Groups + CloudWatch**
 
-## 1. Create the RDS Database
-1. RDS Console → Create database → PostgreSQL → Free tier template
-2. Set DB instance identifier, master username/password (save these — you'll need them for `.env`)
-3. **Do not** make it publicly accessible — it should only be reachable from your EC2 instance's security group
-4. Once available, copy the endpoint into `DB_HOST` in your `.env`
-
-## 2. Create the S3 Bucket
+## 1. Create the S3 Bucket
 1. S3 Console → Create bucket → give it a globally unique name
 2. Keep "Block all public access" ON (the app writes via IAM role, doesn't need public bucket access)
 3. Note the bucket name for `S3_BUCKET_NAME`
 
-## 3. Create an IAM Role for EC2
+## 2. Create an IAM Role for EC2
 1. IAM Console → Roles → Create role → AWS service → EC2
 2. Attach a policy scoped to just your bucket (least privilege), e.g.:
 ```json
@@ -28,15 +22,36 @@ This app deploys as: **EC2 (compute) + RDS PostgreSQL (database) + S3 (storage) 
 ```
 3. Name it e.g. `cloud-webapp-ec2-role`
 
-## 4. Launch the EC2 Instance
+## 3. Launch the EC2 Instance
 1. EC2 Console → Launch instance → Ubuntu 22.04 LTS, t2.micro
-2. Under "Advanced details" → IAM instance profile → select the role from step 3
-3. Security group: allow inbound 22 (your IP), 80 (anywhere), and allow outbound to RDS's security group on port 5432
+2. Under "Advanced details" → IAM instance profile → select the role from step 2
+3. Security group: allow inbound 22 (your IP only) and 80 (anywhere). MariaDB runs locally on this same instance, so no separate DB port needs to be opened to the outside world.
 4. Launch and SSH in
 
-## 5. Deploy the app on EC2
+## 4. Install and configure MariaDB (local database)
 ```bash
-# On the EC2 instance
+sudo apt update
+sudo apt install -y mariadb-server
+sudo systemctl enable mariadb --now
+
+# Secure the installation (set root password, remove anonymous users, etc.)
+sudo mysql_secure_installation
+```
+Create the app database and a dedicated user:
+```bash
+sudo mysql -u root -p
+```
+```sql
+CREATE DATABASE cloudwebapp;
+CREATE USER 'appuser'@'localhost' IDENTIFIED BY 'your-secure-password';
+GRANT ALL PRIVILEGES ON cloudwebapp.* TO 'appuser'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+```
+MariaDB listens on `localhost:3306` only by default — it is **not** reachable from outside the instance, which is why no inbound rule for port 3306 is needed in the security group.
+
+## 5. Install Node.js and deploy the app
+```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs git
 
@@ -45,7 +60,7 @@ cd cloud-webapp
 npm install --production
 
 cp .env.example .env
-nano .env   # fill in DB_HOST, DB_PASSWORD, S3_BUCKET_NAME, etc.
+nano .env   # DB_HOST=localhost, DB_PASSWORD=<same as above>, S3_BUCKET_NAME=...
 
 # Run with a process manager so it survives reboots/SSH disconnects
 sudo npm install -g pm2
@@ -53,23 +68,38 @@ pm2 start src/server.js --name cloud-webapp
 pm2 startup
 pm2 save
 ```
+The app now runs on `localhost:3000`.
 
-## 6. Point port 80 to your app (optional but cleaner than PORT=80)
+## 6. Install and configure Apache httpd as a reverse proxy
 ```bash
-sudo apt install -y nginx
+sudo apt install -y apache2
+sudo a2enmod proxy proxy_http
 ```
-Configure `/etc/nginx/sites-available/default` to reverse proxy `localhost:3000` → port 80, then:
+Edit the default site config:
 ```bash
-sudo systemctl restart nginx
+sudo nano /etc/apache2/sites-available/000-default.conf
 ```
+Add inside the `<VirtualHost *:80>` block:
+```apache
+ProxyPreserveHost On
+ProxyPass / http://localhost:3000/
+ProxyPassReverse / http://localhost:3000/
+```
+Restart Apache:
+```bash
+sudo systemctl restart apache2
+sudo systemctl enable apache2
+```
+Apache httpd now listens on port 80 and forwards all traffic to the Node app running on port 3000.
 
 ## 7. Enable CloudWatch Logs
-1. Install the CloudWatch agent on the EC2 instance, or
-2. Simplest path: since `pm2` and the app log to stdout, attach the CloudWatch Logs agent to ship `/var/log/` and `pm2 logs` output — or use `pm2-logrotate` + CloudWatch agent config pointing at the pm2 log files.
+Install the CloudWatch agent on the EC2 instance and point it at:
+- `pm2` logs (`~/.pm2/logs/`) for application logs
+- `/var/log/apache2/access.log` and `error.log` for web server logs
 
 ## 8. Verify the live site
-- Visit `http://<your-ec2-public-ip>` (or your domain if you set up Route 53)
-- Check `/health` returns `{"status":"ok","db":"connected"}`
+- Visit `http://<your-ec2-public-ip>` — Apache proxies this to your Node app
+- Check `/health` returns `{"status":"ok","db":"connected (MariaDB)"}`
 - That public URL is your **Live Website Link** deliverable
 
 ## 9. (Optional) Attach a domain
@@ -77,14 +107,8 @@ Route 53 → create an A record pointing to your EC2 Elastic IP, so your live li
 
 ---
 
-## Alternative: Elastic Beanstalk (simpler, more "PaaS")
-If you'd rather not manage EC2 directly:
-```bash
-npm install -g eb-cli
-eb init -p node.js-20 cloud-webapp
-eb create cloud-webapp-env
-eb setenv DB_HOST=... DB_PASSWORD=... S3_BUCKET_NAME=...
-eb deploy
-eb open
-```
-Elastic Beanstalk provisions the EC2 instance, security group, and load balancer for you — good if you want to focus on the app layer for this module.
+## Notes on this architecture
+Running MariaDB locally on the same EC2 instance (instead of a managed RDS instance) is simpler to set up and free-tier friendly, but keep in mind for production use:
+- No automated backups/failover — you're responsible for backing up the database yourself (e.g., `mysqldump` on a cron schedule)
+- If the EC2 instance goes down, both the app and the database go down together
+- Scaling the app horizontally (multiple EC2 instances) would require moving to a shared/managed database again

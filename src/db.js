@@ -1,32 +1,27 @@
-const { Pool } = require('pg');
+const mysql = require('mysql2/promise');
 const logger = require('./logger');
 
-// All credentials come from environment variables - never hardcoded.
-// In production these are injected via AWS Secrets Manager / Parameter Store,
-// not committed to this repo (see .env.example).
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT || 5432,
+// MariaDB installed locally on the same EC2 instance as the app.
+// Credentials come from environment variables (see .env.example) - never hardcoded.
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  port: process.env.DB_PORT || 3306,
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  max: 10,
-  idleTimeoutMillis: 30000,
-});
-
-pool.on('error', (err) => {
-  logger.error('Unexpected error on idle DB client', { error: err.message });
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
 });
 
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notes (
-      id SERIAL PRIMARY KEY,
+      id INT AUTO_INCREMENT PRIMARY KEY,
       title VARCHAR(255) NOT NULL,
       content TEXT,
       file_url TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
   logger.info('Database schema verified/created');
