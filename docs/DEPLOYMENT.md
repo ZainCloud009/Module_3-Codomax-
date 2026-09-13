@@ -16,14 +16,14 @@ This app deploys as: **EC2 (compute, single instance) + MariaDB (local database,
   "Statement": [{
     "Effect": "Allow",
     "Action": ["s3:PutObject", "s3:GetObject"],
-    "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME/*"
+    "Resource": "arn:aws:s3:::module-3codomaxdigitalsolutions"
   }]
 }
 ```
 3. Name it e.g. `cloud-webapp-ec2-role`
 
 ## 3. Launch the EC2 Instance
-1. EC2 Console → Launch instance → Ubuntu 22.04 LTS, t2.micro
+1. EC2 Console → Launch instance → Amazon Linux 2023, t2.micro
 2. Under "Advanced details" → IAM instance profile → select the role from step 2
 3. Security group: allow inbound 22 (your IP only) and 80 (anywhere). MariaDB runs locally on this same instance, so no separate DB port needs to be opened to the outside world.
 4. Launch and SSH in
@@ -43,7 +43,7 @@ sudo mysql -u root -p
 ```
 ```sql
 CREATE DATABASE cloudwebapp;
-CREATE USER 'appuser'@'localhost' IDENTIFIED BY 'your-secure-password';
+CREATE USER 'appuser'@'localhost' IDENTIFIED BY 'Zain@123455';
 GRANT ALL PRIVILEGES ON cloudwebapp.* TO 'appuser'@'localhost';
 FLUSH PRIVILEGES;
 EXIT;
@@ -52,10 +52,10 @@ MariaDB listens on `localhost:3306` only by default — it is **not** reachable 
 
 ## 5. Install Node.js and deploy the app
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs git
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo dnf install -y nodejs
 
-git clone <your-repo-url>
+git clone https://github.com/ZainCloud009/Module_3-Codomax-.git
 cd cloud-webapp
 npm install --production
 
@@ -77,7 +77,7 @@ sudo a2enmod proxy proxy_http
 ```
 Edit the default site config:
 ```bash
-sudo nano /etc/apache2/sites-available/000-default.conf
+sudo nano /etc/httpd/conf.d/Module3.conf
 ```
 Add inside the `<VirtualHost *:80>` block:
 ```apache
@@ -87,8 +87,8 @@ ProxyPassReverse / http://localhost:3000/
 ```
 Restart Apache:
 ```bash
-sudo systemctl restart apache2
-sudo systemctl enable apache2
+sudo systemctl restart httpd
+sudo systemctl enable httpd
 ```
 Apache httpd now listens on port 80 and forwards all traffic to the Node app running on port 3000.
 
@@ -98,7 +98,7 @@ Install the CloudWatch agent on the EC2 instance and point it at:
 - `/var/log/apache2/access.log` and `error.log` for web server logs
 
 ## 8. Verify the live site
-- Visit `http://<your-ec2-public-ip>` — Apache proxies this to your Node app
+- Visit `http://16.171.159.58/` — Apache proxies this to your Node app
 - Check `/health` returns `{"status":"ok","db":"connected (MariaDB)"}`
 - That public URL is your **Live Website Link** deliverable
 
